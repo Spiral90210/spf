@@ -128,6 +128,104 @@ func (m *Mechanism) Valid() bool {
 	return hasResult && hasName && isIP
 }
 
+// Returns the net.IP for the mechanism only if it is an ip4 or ip6 type and
+// the record indicates that the IP is permitted.
+func (m *Mechanism) PermittedNetworks() (*net.IPNet, error) {
+	if m.Name == "ip4" || m.Name == "ip6" {
+		if m.Result == Pass || m.Result == Neutral || m.Result == SoftFail {
+			_, network, err := net.ParseCIDR(m.Domain)
+			return network, err
+		}
+	}
+	return nil, nil
+}
+
+func (m *Mechanism) Networks(count int) (map[*net.IPNet]Result, error) {
+	switch m.Name {
+	case "all":
+		return map[*net.IPNet]Result{globalNetwork(): m.Result}, nil
+	case "exists":
+		_, err := net.LookupHost(m.Domain)
+		if err == nil {
+			return map[*net.IPNet]Result{globalNetwork(): m.Result}, nil
+		}
+	case "redirect":
+		spf, err := NewSPF(m.Domain, "", count)
+
+		// There is no clear definition of what to do with errors on a
+		// redirected domain. Trying to make wise choices here.
+		switch err {
+		case nil:
+			break
+		case ErrFailedLookup:
+			return make(map[*net.IPNet]Result, 0), errors.New("TempError on redirect")
+		default:
+			return make(map[*net.IPNet]Result, 0), errors.New("PermError on redirect")
+		}
+
+		nested := make(map[*net.IPNet]Result, 32)
+		for _, nestedM := range spf.Mechanisms {
+			x, err := nestedM.Networks(count)
+			if err != nil {
+				return x, err
+			} else {
+				for y, z := range x {
+					nested[y] = z
+				}
+			}
+		}
+		return nested, nil
+
+	case "include":
+		spf, err := NewSPF(m.Domain, "", count)
+
+		// If there is no SPF record for the included domain or if we have too
+		// many mechanisms that require DNS lookups it is considered a
+		// PermError. Any other error is ok to ignore.
+		if err == ErrNoRecord || err == ErrMaxCount {
+			return make(map[*net.IPNet]Result, 0), errors.New("PermError on include")
+		}
+
+		// The include statment is meant to be used as an if-pass or on-pass
+		// statement. Meaning if we get a result other than Pass or PermError,
+		// it is ok to ignore it and move on to the other mechanisms.
+		nested := make(map[*net.IPNet]Result, 32)
+		for _, nestedM := range spf.Mechanisms {
+			x, err := nestedM.Networks(count)
+			if err != nil {
+				return x, err
+			} else {
+				for y, z := range x {
+					nested[y] = z
+				}
+			}
+		}
+		return nested, nil
+	case "a":
+		nets := make(map[*net.IPNet]Result, 32)
+		for _, network := range aNetworks(m) {
+			nets[network] = m.Result
+		}
+		return nets, nil
+	case "mx":
+		nets := make(map[*net.IPNet]Result, 32)
+		for _, network := range mxNetworks(m) {
+			nets[network] = m.Result
+		}
+		return nets, nil
+	case "ptr":
+		return make(map[*net.IPNet]Result, 0), errors.New("ptr in SPF is depricated and not supported")
+	default:
+		network, err := networkCIDR(m.Domain, m.Prefix)
+		if err != nil {
+			return make(map[*net.IPNet]Result, 0), errors.New("error on ip")
+		}
+		return map[*net.IPNet]Result{network: m.Result}, nil
+	}
+
+	return make(map[*net.IPNet]Result, 0), errors.New("no matching name found")
+}
+
 // Evaluate determines if the given IP address is covered by the mechanism.
 // If the IP is covered, the mechanism result is returned and error is nil.
 // If the IP is not covered an error is returned. The caller must check for

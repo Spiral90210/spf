@@ -79,6 +79,23 @@ func (s *SPF) SPFString() string {
 	return buf.String()
 }
 
+// Returns only networks which are allowed
+func (s *SPF) PermittedNetworks() ([]*net.IPNet, error) {
+	networks := make([]*net.IPNet, 0)
+	for _, mechanism := range s.Mechanisms {
+		nets, err := mechanism.Networks(0)
+		if err != nil {
+			return nil, err
+		}
+		for n, res := range nets {
+			if res == Pass || res == Neutral || res == SoftFail {
+				networks = append(networks, n)
+			}
+		}
+	}
+	return networks, nil
+}
+
 func getSPFRecord(domain string) (string, error) {
 	var spfText string
 

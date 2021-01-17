@@ -80,3 +80,11 @@ func testPTR(m *Mechanism, ip string) bool {
 
 	return false
 }
+
+func globalNetwork() *net.IPNet {
+	_, network, err := net.ParseCIDR("0.0.0.0/0")
+	if err != nil {
+		panic(err)
+	}
+	return network
+}
