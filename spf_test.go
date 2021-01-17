@@ -1,6 +1,8 @@
 package spf
 
 import (
+	"errors"
+	"net"
 	"testing"
 )
 
@@ -90,4 +92,52 @@ func TestSPFString(t *testing.T) {
 			t.Error("Expected", tcase.expected, "got", r)
 		}
 	}
+}
+
+func TestSPF_PermittedNetworks(t *testing.T) {
+	tests := []struct {
+		record   string
+		required []*net.IPNet
+	}{
+		{record: "v=spf1 ip4:192.0.2.0 -all", required: mustMakeNetworks("192.0.2.0/32")},
+	}
+	for _, test := range tests {
+		t.Run(test.record, func(t *testing.T) {
+			sut, err := NewSPF("", test.record, 0)
+			if err != nil {
+				t.Fatalf("error when parsing spf record for test: %+v", err)
+			}
+			permitted, err := sut.PermittedNetworks()
+			if err != nil {
+				t.Fatalf("error when generating permitted networks for test: %+v", err)
+			}
+
+			if len(permitted) != len(test.required) {
+				t.Fatalf("Expected %d permitted networks, got %d: %v", len(test.required), len(permitted), permitted)
+			}
+
+		OUTER:
+			for _, required := range test.required {
+				for _, x := range permitted {
+					if x.String() == required.String() {
+						continue OUTER
+					}
+				}
+				t.Errorf("missing required network %s", required.String())
+			}
+		})
+	}
+}
+
+func mustMakeNetworks(cidrs ...string) []*net.IPNet {
+	networks := make([]*net.IPNet, 0)
+
+	for _, s := range cidrs {
+		_, n, err := net.ParseCIDR(s)
+		if err != nil {
+			panic(errors.New("must parse net for test: " + s))
+		}
+		networks = append(networks, n)
+	}
+	return networks
 }
